@@ -1,0 +1,21 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+.pytest_cache/
+.coverage
+dist/
+build/
+*.egg-info/
+
+.venv/
+venv/
+env/
+
+# configs locais (não versionar)
+config/config.yaml
+config/logging.yaml
+
+# staging local
+.staging/
