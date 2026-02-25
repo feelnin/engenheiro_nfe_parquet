@@ -262,6 +262,16 @@ def _process_xml(
         log.debug("xml_skipped_checkpoint", extra={"source": it.source, "file": str(it.file_path)})
         return None
 
+    xml_bytes = it.file_path.read_bytes()
+
+    # Arquivo vazio ou só whitespace: descarta sem quebrar o pipeline
+    if not xml_bytes.strip():
+        log.warning(
+            "xml_empty_skipped",
+            extra={"source": it.source, "file": str(it.file_path)},
+        )
+        return None
+
     meta = SourceMeta(
         source=it.source,
         source_root=it.source_root,
@@ -270,7 +280,6 @@ def _process_xml(
         source_entry_path=None,
         source_file_mtime=datetime.fromtimestamp(it.file_path.stat().st_mtime),
     )
-    xml_bytes = it.file_path.read_bytes()
     result = parse_nfe_xml(xml_bytes, meta=meta, ingested_at=ingested_at)
 
     if result.warnings:
@@ -280,7 +289,6 @@ def _process_xml(
         )
 
     return [result.record], key
-
 
 def _process_zip(
     cfg: AppConfig, it: WorkItem, ingested_at: datetime, ckpt: SQLiteCheckpointStore

@@ -277,6 +277,14 @@ def _process_xml(
 
     xml_bytes = it.file_path.read_bytes()
 
+    # Arquivo vazio ou só whitespace: descarta sem quebrar o pipeline
+    if not xml_bytes.strip():
+        log.warning(
+            "xml_empty_skipped",
+            extra={"source": _SOURCE_NAME, "file": str(it.file_path)},
+        )
+        return None
+
     # Inspeciona tag raiz — descarta silenciosamente se não for CT-e
     if not is_cte_xml(xml_bytes):
         log.debug("xml_not_cte", extra={"source": _SOURCE_NAME, "file": str(it.file_path)})

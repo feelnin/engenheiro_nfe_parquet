@@ -7,6 +7,8 @@ from lxml import etree
 def parse_xml_bytes(xml_bytes: bytes) -> etree._Element:
     """Parseia bytes de XML, tolerando BOM e espaços iniciais."""
     xml_bytes = xml_bytes.lstrip()
+    if not xml_bytes:
+        raise ValueError("XML vazio ou somente whitespace")
     return etree.fromstring(xml_bytes)
 
 
