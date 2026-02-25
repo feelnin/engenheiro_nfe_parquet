@@ -1,3 +1,8 @@
+"""
+src/nfe_parquet/config/models.py  (ATUALIZADO)
+
+Adicionado campo output_cte em PathsConfig para o diretório de saída dos Parquets de CT-e.
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -10,6 +15,7 @@ class PathsConfig:
     input_processados: Path
     output_importados: Path
     output_processados: Path
+    output_cte: Path            # ← NOVO: saída dos Parquets de CT-e
     tmp_extract_dir: Path
     staging_dir: Path
 
@@ -36,6 +42,7 @@ class CheckpointConfig:
 class LoggingConfig:
     level: str
     json: bool
+    file_path: Path | None = None
 
 
 @dataclass(frozen=True)

@@ -1,3 +1,8 @@
+"""
+src/nfe_parquet/config/loader.py  (ATUALIZADO)
+
+Lê o novo campo paths.outputs.cte do YAML.
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -16,7 +21,6 @@ from .models import (
 
 
 def load_config(config_path: Path) -> AppConfig:
-    """Carrega config YAML e converte para AppConfig."""
     raw = _read_yaml(config_path)
     return _parse_config(raw)
 
@@ -38,6 +42,7 @@ def _parse_config(raw: dict[str, Any]) -> AppConfig:
         input_processados=Path(paths["inputs"]["processados"]),
         output_importados=Path(paths["outputs"]["importados"]),
         output_processados=Path(paths["outputs"]["processados"]),
+        output_cte=Path(paths["outputs"]["cte"]),               # ← NOVO
         tmp_extract_dir=Path(paths["tmp_extract_dir"]),
         staging_dir=Path(paths["staging_dir"]),
     )
@@ -57,9 +62,11 @@ def _parse_config(raw: dict[str, Any]) -> AppConfig:
         sqlite_path=Path(ckpt.get("sqlite_path", "checkpoint.sqlite")),
     )
 
+    raw_log_file = log.get("file_path")
     log_cfg = LoggingConfig(
         level=str(log.get("level", "INFO")),
         json=bool(log.get("json", True)),
+        file_path=Path(raw_log_file) if raw_log_file else None,
     )
 
     return AppConfig(
