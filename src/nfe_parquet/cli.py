@@ -1,5 +1,5 @@
 """
-src/nfe_parquet/cli.py  
+src/nfe_parquet/cli.py
 
 Ponto de entrada da aplicação.
 setup_logging() é chamado AQUI, uma única vez, antes de qualquer outra coisa.
@@ -41,7 +41,7 @@ def main() -> None:
     t0 = time.perf_counter()
 
     try:
-        run_once_mt(cfg)
+        had_errors = run_once_mt(cfg)
     except KeyboardInterrupt:
         log.warning("pipeline_interrupted_by_user")
         sys.exit(130)
@@ -50,6 +50,14 @@ def main() -> None:
         sys.exit(1)
 
     elapsed = time.perf_counter() - t0
+
+    if had_errors:
+        log.warning(
+            "pipeline_finish_with_errors",
+            extra={"elapsed_s": round(elapsed, 3)},
+        )
+        sys.exit(1)
+
     log.info("pipeline_finish", extra={"elapsed_s": round(elapsed, 3)})
 
 

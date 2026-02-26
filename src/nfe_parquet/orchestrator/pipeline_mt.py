@@ -1,10 +1,9 @@
-
 from __future__ import annotations
 
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Set, Tuple, List
 
@@ -31,8 +30,15 @@ from ..transform.window import last_n_months_yyyymm
 log = get_logger(__name__)
 
 
-def run_once_mt(cfg: AppConfig) -> None:
-    ingested_at = datetime.utcnow()
+def run_once_mt(cfg: AppConfig) -> bool:
+    """
+    Executa o pipeline completo.
+
+    Returns:
+        True  — se qualquer origem teve errors > 0 (agendador deve tratar como falha)
+        False — tudo correu sem erros
+    """
+    ingested_at = datetime.now(timezone.utc)
 
     ckpt = SQLiteCheckpointStore(cfg.checkpoint.sqlite_path)
 
@@ -44,12 +50,14 @@ def run_once_mt(cfg: AppConfig) -> None:
     moving_months = last_n_months_yyyymm(ingested_at, cfg.rules.moving_window_months)
     log.info("moving_window_set", extra={"months": sorted(moving_months)})
 
+    had_errors = False
+
     # ── NF-e ──────────────────────────────────────────────────────────────────
     for source_name, input_root, output_dir in (
         ("importados", cfg.paths.input_importados, cfg.paths.output_importados),
         ("processados", cfg.paths.input_processados, cfg.paths.output_processados),
     ):
-        _run_source_mt(
+        source_had_errors = _run_source_mt(
             cfg=cfg,
             source_name=source_name,
             input_root=input_root,
@@ -58,11 +66,17 @@ def run_once_mt(cfg: AppConfig) -> None:
             ckpt=ckpt,
             moving_months=moving_months,
         )
+        if source_had_errors:
+            had_errors = True
 
     # ── CT-e (mesma pasta de processados, mesmo ckpt, mesma janela) ───────────
     log.info("cte_pipeline_start")
-    run_cte_mt(cfg=cfg, ckpt=ckpt, moving_months=moving_months)
+    cte_had_errors = run_cte_mt(cfg=cfg, ckpt=ckpt, moving_months=moving_months)
+    if cte_had_errors:
+        had_errors = True
     log.info("cte_pipeline_finish")
+
+    return had_errors
 
 
 def _run_source_mt(
@@ -73,7 +87,16 @@ def _run_source_mt(
     ingested_at: datetime,
     ckpt: SQLiteCheckpointStore,
     moving_months: Set[str],
-) -> None:
+) -> bool:
+    ctx = {"source": source_name}
+
+    if not input_root.exists():
+        log.error(
+            "input_dir_not_found",
+            extra={**ctx, "root": str(input_root)},
+        )
+        return True  # propaga como error → exit code 1
+
     schema = get_arrow_schema()
     parts_root = cfg.paths.staging_dir / "parts"
     commit_tmp_root = cfg.paths.staging_dir / "commit_tmp"
@@ -85,8 +108,6 @@ def _run_source_mt(
     chunk_size = cfg.performance.file_chunk_size
     max_workers = cfg.performance.max_workers
     max_buffer_records = cfg.performance.record_chunk_size
-
-    ctx = {"source": source_name}
 
     log.info("scan_start", extra={**ctx, "root": str(input_root)})
     t_scan = time.perf_counter()
@@ -102,7 +123,7 @@ def _run_source_mt(
 
     if not work_items:
         log.warning("scan_empty", extra=ctx)
-        return
+        return False
 
     ok = filtered = errors = skipped = 0
     months_seen: set[str] = set()
@@ -238,6 +259,8 @@ def _run_source_mt(
         },
     )
 
+    return errors > 0
+
 
 def _process_work_item(
     cfg: AppConfig, it: WorkItem, ingested_at: datetime, ckpt: SQLiteCheckpointStore
@@ -264,12 +287,8 @@ def _process_xml(
 
     xml_bytes = it.file_path.read_bytes()
 
-    # Arquivo vazio ou só whitespace: descarta sem quebrar o pipeline
     if not xml_bytes.strip():
-        log.warning(
-            "xml_empty_skipped",
-            extra={"source": it.source, "file": str(it.file_path)},
-        )
+        log.warning("xml_empty_skipped", extra={"source": it.source, "file": str(it.file_path)})
         return None
 
     meta = SourceMeta(
@@ -289,6 +308,7 @@ def _process_xml(
         )
 
     return [result.record], key
+
 
 def _process_zip(
     cfg: AppConfig, it: WorkItem, ingested_at: datetime, ckpt: SQLiteCheckpointStore
@@ -312,6 +332,15 @@ def _process_zip(
     with extract_zip_to_temp(it.file_path, cfg.paths.tmp_extract_dir) as tmp_dir:
         for xml_path in tmp_dir.rglob("*.xml"):
             entry_path = str(xml_path.relative_to(tmp_dir))
+            xml_bytes = xml_path.read_bytes()
+
+            if not xml_bytes.strip():
+                log.warning(
+                    "zip_entry_empty_skipped",
+                    extra={"source": it.source, "zip": str(it.file_path), "entry": entry_path},
+                )
+                continue
+
             meta = SourceMeta(
                 source=it.source,
                 source_root=it.source_root,
@@ -320,7 +349,6 @@ def _process_zip(
                 source_entry_path=entry_path,
                 source_file_mtime=zip_mtime,
             )
-            xml_bytes = xml_path.read_bytes()
             result = parse_nfe_xml(xml_bytes, meta=meta, ingested_at=ingested_at)
 
             if result.warnings:
@@ -397,24 +425,74 @@ def _compact_month(
     log.info("compact_start", extra={"source": source, "month": month, "parts": len(parts)})
     t0 = time.perf_counter()
 
-    writer = pq.ParquetWriter(tmp_path, schema=schema)
-    total_rows = 0
-    try:
-        for p in parts:
-            t = pq.read_table(p, schema=schema)
-            writer.write_table(t)
-            total_rows += t.num_rows
-    finally:
-        writer.close()
+    # ── Concatenar todas as parts ──────────────────────────────────────────────
+    tables = []
+    total_rows_raw = 0
+    for p in parts:
+        t = pq.read_table(p, schema=schema)
+        tables.append(t)
+        total_rows_raw += t.num_rows
 
+    if not tables:
+        log.warning("compact_no_data", extra={"source": source, "month": month})
+        return
+
+    combined = pa.compute.list_flatten(tables) if len(tables) > 1 else tables[0]
+
+    # ── Dedupe por chNFe (NF-e) ────────────────────────────────────────────────
+    # Critério: chave asc, source_file_mtime_ns desc, ingested_at desc, source_file_path desc, source_entry_path desc
+    key_col = "chNFe"
+    sort_keys = [
+        (key_col, "ascending"),
+        ("source_file_mtime_ns", "descending"),
+        ("ingested_at", "descending"),
+        ("source_file_path", "descending"),
+        ("source_entry_path", "descending"),
+    ]
+
+    # Filtrar nulos de chave (logar e descartar)
+    valid_mask = pc.is_null(combined[key_col], nan_is_null=True)
+    null_keys_count = pc.count(valid_mask).as_py()
+    combined = pc.filter(combined, pc.invert(valid_mask))
+
+    # Ordenar
+    sorted_indices = pc.sort_indices(combined, sort_keys=sort_keys)
+    sorted_table = pc.take(combined, sorted_indices)
+
+    # Manter primeira ocorrência por chave (dedupe)
+    key_column = sorted_table[key_col]
+    is_first = pc.unique(key_column, count_option="first").indices
+    deduped = pc.take(sorted_table, is_first)
+
+    total_rows_after = deduped.num_rows
+    dupes_removed = total_rows_raw - total_rows_after
+
+    log.info(
+        "compact_dedupe",
+        extra={
+            "source": source,
+            "month": month,
+            "rows_before": total_rows_raw,
+            "rows_after": total_rows_after,
+            "dupes_removed": dupes_removed,
+            "null_keys": null_keys_count,
+        },
+    )
+
+    # ── Escrever final ─────────────────────────────────────────────────────────
+    pq.write_table(deduped, tmp_path)
     atomic_replace(tmp_path, final_path)
+
+    import shutil
+    shutil.rmtree(parts_dir, ignore_errors=True)
+
     log.info(
         "compact_done",
         extra={
             "source": source,
             "month": month,
             "parts": len(parts),
-            "rows": total_rows,
+            "rows": total_rows_after,
             "output": str(final_path),
             "elapsed_ms": round((time.perf_counter() - t0) * 1000),
         },

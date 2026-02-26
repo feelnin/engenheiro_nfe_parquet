@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<cteProc xmlns="http://www.portalfiscal.inf.br/cte" versao="4.00">
+  <CTe xmlns="http://www.portalfiscal.inf.br/cte">
+    <infCte Id="CTe35260133431854000343570050000001001000010010" versao="4.00">
+      <ide>
+        <cUF>35</cUF>
+        <cCT>00001001</cCT>
+        <CFOP>5353</CFOP>
+        <natOp>PRESTACAO DE SERVICO DE TRANSPORTE</natOp>
+        <mod>57</mod>
+        <serie>005</serie>
+        <nCT>1001</nCT>
+        <dhEmi>2026-02-10T09:00:00-03:00</dhEmi>
+        <tpImp>1</tpImp>
+        <tpEmis>1</tpEmis>
+        <tpAmb>1</tpAmb>
+        <tpCTe>0</tpCTe>
+        <procEmi>0</procEmi>
+        <verProc>4.00</verProc>
+        <cMunEnv>3550308</cMunEnv>
+        <xMunEnv>SAO PAULO</xMunEnv>
+        <UFEnv>SP</UFEnv>
+        <modal>01</modal>
+        <tpServ>0</tpServ>
+        <cMunIni>3550308</cMunIni>
+        <xMunIni>SAO PAULO</xMunIni>
+        <UFIni>SP</UFIni>
+        <cMunFim>5208707</cMunFim>
+        <xMunFim>GOIANIA</xMunFim>
+        <UFFim>GO</UFFim>
+        <retira>0</retira>
+        <toma3>
+          <toma>3</toma>
+        </toma3>
+      </ide>
+      <compl>
+        <xObs>OBSERVACAO DO CT-E DE TESTE</xObs>
+      </compl>
+      <emit>
+        <CNPJ>33431854000343</CNPJ>
+        <IE>10203040506</IE>
+        <xNome>TRANSPORTADORA TESTE LTDA</xNome>
+        <enderEmit>
+          <xLgr>AV TRANSPORTADORA</xLgr>
+          <nro>999</nro>
+          <xBairro>LOGISTICA</xBairro>
+          <cMun>3550308</cMun>
+          <xMun>SAO PAULO</xMun>
+          <UF>SP</UF>
+          <CEP>04000000</CEP>
+          <cPais>1058</cPais>
+          <xPais>Brasil</xPais>
+          <fone>1100000000</fone>
+        </enderEmit>
+      </emit>
+      <rem>
+        <CNPJ>11222333000181</CNPJ>
+        <IE>111222333444</IE>
+        <xNome>REMETENTE DA CARGA SA</xNome>
+        <fone>1100000001</fone>
+        <enderReme>
+          <xLgr>RUA REMETENTE</xLgr>
+          <nro>1</nro>
+          <xBairro>BAIRRO A</xBairro>
+          <cMun>3550308</cMun>
+          <xMun>SAO PAULO</xMun>
+          <UF>SP</UF>
+          <CEP>01000000</CEP>
+          <cPais>1058</cPais>
+          <xPais>Brasil</xPais>
+        </enderReme>
+      </rem>
+      <dest>
+        <CNPJ>33431854000343</CNPJ>
+        <IE>10203040506</IE>
+        <xNome>DESTINATARIO DA CARGA LTDA</xNome>
+        <fone>6200000000</fone>
+        <enderDest>
+          <xLgr>RUA DESTINATARIO</xLgr>
+          <nro>500</nro>
+          <xBairro>SETOR NORTE</xBairro>
+          <cMun>5208707</cMun>
+          <xMun>GOIANIA</xMun>
+          <UF>GO</UF>
+          <CEP>74000000</CEP>
+          <cPais>1058</cPais>
+          <xPais>Brasil</xPais>
+        </enderDest>
+      </dest>
+      <vPrest>
+        <vTPrest>850.00</vTPrest>
+        <vRec>850.00</vRec>
+        <Comp>
+          <xNome>FRETE</xNome>
+          <vComp>850.00</vComp>
+        </Comp>
+      </vPrest>
+      <imp>
+        <ICMS>
+          <ICMS00>
+            <CST>00</CST>
+            <vBC>850.00</vBC>
+            <pICMS>12.00</pICMS>
+            <vICMS>102.00</vICMS>
+          </ICMS00>
+        </ICMS>
+      </imp>
+      <infCTeNorm>
+        <infCarga>
+          <vCarga>10000.00</vCarga>
+          <proPred>MERCADORIAS EM GERAL</proPred>
+          <infQ>
+            <cUnid>00</cUnid>
+            <tpMed>PESO BRUTO</tpMed>
+            <qCarga>500.000</qCarga>
+          </infQ>
+          <infQ>
+            <cUnid>03</cUnid>
+            <tpMed>PESO CUBADO</tpMed>
+            <qCarga>600.000</qCarga>
+          </infQ>
+        </infCarga>
+        <infDoc>
+          <infNFe>
+            <chave>52260233431854000343570050000279611000285848</chave>
+            <PIN>12345</PIN>
+          </infNFe>
+        </infDoc>
+      </infCTeNorm>
+    </infCte>
+  </CTe>
+  <protCTe versao="4.00">
+    <infProt>
+      <tpAmb>1</tpAmb>
+      <verAplic>SP_CTE_PL_009</verAplic>
+      <chCTe>35260133431854000343570050000001001000010010</chCTe>
+      <dhRecbto>2026-02-10T09:05:00-03:00</dhRecbto>
+      <nProt>135260000000001</nProt>
+      <digVal>ghi789==</digVal>
+      <cStat>100</cStat>
+      <xMotivo>Autorizado o uso do CT-e</xMotivo>
+    </infProt>
+  </protCTe>
+</cteProc>

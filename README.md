@@ -1,227 +1,169 @@
-# NF-e Parquet ETL
+# nfe-parquet
 
-Pipeline Python para processar NF-e em XML (incluindo XMLs dentro de ZIPs) e gerar **1 arquivo Parquet por mês (`AAAAMM.parquet`)**, por origem, com idempotência via checkpoint SQLite e logs JSON estruturados.
-
----
+Pipeline ETL para processamento de documentos fiscais brasileiros (NF-e e CT-e) em formato XML, convertendo-os em arquivos Parquet mensais particionados por período de emissão.
 
 ## Visão geral
 
+O pipeline lê arquivos XML e ZIP de diretórios de entrada, extrai os campos fiscais relevantes, aplica filtros de janela móvel e escreve os dados em Parquet compactado. Cada execução é idempotente: arquivos já processados são ignorados via checkpoint SQLite baseado em fingerprint de tamanho + mtime.
+
 ```
-XML_SICOF/
-├── processados_importados/   ←─┐
-│   ├── *.xml                   │  scan recursivo
-│   └── *.zip (com *.xml)       │
-└── processados_XML/          ←─┘
-
-              ↓  parse + filtro + janela móvel
-
-PARQUET_NFE/
-├── importados/
-│   ├── 202601.parquet
-│   └── 202602.parquet
-└── processados/
-    ├── 202601.parquet
-    └── 202602.parquet
+XML / ZIP  ──►  Scanner  ──►  Parser  ──►  Filtros  ──►  Buffer  ──►  Flush  ──►  Compact  ──►  Parquet
+                                                              │
+                                                         Checkpoint
+                                                          (SQLite)
 ```
 
-**Regras principais:**
-- Nunca altera ou exclui arquivos de origem.
-- Filtra NF-e por ano de emissão (`ide/dhEmi` ou `ide/dEmi`) com `min_year` configurável.
-- Reprocessa sempre uma **janela móvel** dos últimos N meses (reconciliação automática).
-- ZIPs são extraídos em diretório temporário e limpos ao final, mesmo em caso de erro.
-- Idempotência garantida por fingerprint `(tamanho + mtime)` gravado em SQLite.
-- 1 linha por NF-e; itens, duplicatas e pagamentos como arrays alinhados.
+## Funcionalidades
 
----
+- Processamento paralelo com `ThreadPoolExecutor` configurável
+- Suporte a NF-e (`nfeProc`, `NFe` direto, `dEmi` como fallback de data)
+- Suporte a CT-e (`cteProc`) — detectado automaticamente por tag raiz via `is_cte_xml`
+- Leitura de XMLs soltos e dentro de ZIPs
+- Arquivos vazios (0 bytes ou só whitespace) descartados como `skipped` sem bloquear o pipeline
+- Escrita atômica via arquivo `.tmp` + `os.replace`
+- Limpeza automática do staging após compactação
+- Logging estruturado JSON compatível com Datadog / Loki
+- Exit code `1` quando qualquer origem reporta erros — compatível com Task Scheduler, Airflow e cron
 
 ## Estrutura do projeto
 
 ```
-nfe-parquet/
+src/nfe_parquet/
+├── cli.py                          # Ponto de entrada (argparse + exit code)
 ├── config/
-│   └── config.yaml                        # configuração da execução (não versionado)
-├── src/
-│   └── nfe_parquet/
-│       ├── checkpoint/
-│       │   ├── fingerprint.py             # hash size+mtime do arquivo
-│       │   └── store_sqlite.py            # store SQLite com cache em RAM
-│       ├── config/
-│       │   ├── loader.py                  # lê e valida o config.yaml
-│       │   └── models.py                  # dataclasses de configuração
-│       ├── domain/
-│       │   └── models.py                  # SourceMeta, ParseResult
-│       ├── io/
-│       │   ├── scanner.py                 # scan recursivo de XML e ZIP
-│       │   └── zip_extract.py             # extração temporária de ZIP
-│       ├── observability/
-│       │   ├── json_formatter.py          # formatter JSON estruturado
-│       │   └── setup.py                   # setup_logging() + get_logger()
-│       ├── orchestrator/
-│       │   ├── chunking.py                # iterador em batches
-│       │   └── pipeline_mt.py             # pipeline principal (multi-thread)
-│       ├── parse/
-│       │   ├── nfe_parser.py              # parser XML → dict canônico
-│       │   └── xml_utils.py               # helpers lxml sem XPath
-│       ├── schema/
-│       │   └── parquet_schema.py          # schema Arrow tipado
-│       ├── transform/
-│       │   ├── filters.py                 # filtro por ano de emissão
-│       │   └── window.py                  # cálculo da janela móvel de meses
-│       ├── write/
-│       │   └── atomic_commit.py           # os.replace atômico
-│       └── cli.py                         # ponto de entrada da aplicação
-├── tests/
-│   ├── fixtures/                          # XMLs e ZIPs de teste
-│   └── test_placeholder.py
-├── pyproject.toml
-└── README.md
+│   ├── models.py                   # Dataclasses de configuração
+│   └── loader.py                   # Carregamento do config.yaml
+├── domain/
+│   └── models.py                   # SourceMeta, ParseResult
+├── io/
+│   ├── scanner.py                  # Varredura de diretórios (WorkItem)
+│   └── zip_extract.py              # Extração segura de ZIPs para tmp
+├── parse/
+│   ├── xml_utils.py                # parse_xml_bytes (defensivo, rejeita vazio)
+│   ├── nfe_parser.py               # parse_nfe_xml
+│   └── cte_parser.py               # parse_cte_xml, is_cte_xml
+├── transform/
+│   ├── filters.py                  # is_year_allowed
+│   └── window.py                   # last_n_months_yyyymm
+├── schema/
+│   ├── parquet_schema.py           # get_arrow_schema (NF-e)
+│   └── cte_schema.py               # get_cte_arrow_schema
+├── checkpoint/
+│   ├── fingerprint.py              # fingerprint_size_mtime
+│   └── store_sqlite.py             # SQLiteCheckpointStore, CheckpointKey
+├── write/
+│   ├── parquet_writer.py           # write_monthly_parquet
+│   └── atomic_commit.py            # atomic_replace
+├── orchestrator/
+│   ├── pipeline_mt.py              # run_once_mt, _run_source_mt
+│   ├── pipeline_cte_mt.py          # run_cte_mt, _run_source_cte
+│   └── chunking.py                 # chunked (iterador em lotes)
+└── observability/
+    └── setup.py                    # setup_logging, get_logger
+
+tests/
+├── conftest.py                     # Fixtures compartilhados
+├── fixtures/
+│   ├── nfe_nfeproc.xml             # NF-e completa (nfeProc + protNFe)
+│   ├── nfe_direta_demi.xml         # NF-e sem nfeProc, com dEmi
+│   ├── nfe_campos_opcionais_ausentes.xml
+│   ├── cte_cteproc.xml             # CT-e completa (cteProc + protCTe)
+│   ├── zip_com_xmls.zip            # Gerado por make_zip.py
+│   └── make_zip.py
+├── test_parser.py
+├── test_transform.py
+├── test_checkpoint.py
+└── test_writer.py
 ```
-
----
-
-## Pré-requisitos
-
-- Python **3.11** ou superior
-- pip atualizado
-
----
 
 ## Instalação
 
-### 1. Clone o repositório
-
 ```bash
-git clone <url-do-repositorio>
-cd nfe-parquet
-```
-
-### 2. Crie o ambiente virtual
-
-```bash
-# Windows
 python -m venv .venv
-.venv\Scripts\activate
-
-# Linux / macOS
-python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -e ".[dev]"
 ```
 
-### 3. Instale o pacote e suas dependências
-
-```bash
-pip install -e .
-```
-
-O modo `-e` (editable) permite editar o código sem reinstalar.
-
----
+Dependências principais: `lxml`, `pyarrow`, `pyyaml`.
+Dependências de desenvolvimento: `pytest`, `pytest-cov`.
 
 ## Configuração
 
-Crie o arquivo `config/config.yaml` baseado no exemplo abaixo. Este arquivo **não é versionado** (está no `.gitignore`).
+Copie e ajuste `config.example.yaml`:
 
 ```yaml
 paths:
-  inputs:
-    importados:  "C:\\XML_SICOF\\processados_importados"
-    processados: "C:\\XML_SICOF\\processados_XML"
-  outputs:
-    importados:  "L:\\Arquivos carga BI\\PY\\PARQUET_NFE\\importados"
-    processados: "L:\\Arquivos carga BI\\PY\\PARQUET_NFE\\processados"
-  tmp_extract_dir: "C:\\nfe_etl\\tmp"
-  staging_dir:     "C:\\nfe_etl\\staging"
-
-rules:
-  min_year: 2026              # ignora NF-e com emissão anterior a este ano
-  moving_window_months: 2     # reprocessa os últimos N meses a cada execução
-
-performance:
-  max_workers: 8              # threads paralelas para processamento de arquivos
-  file_chunk_size: 2000       # arquivos por batch submetido ao pool
-  record_chunk_size: 50000    # registros em memória antes de fazer flush para disco
+  input_importados: C:\dados\importados
+  input_processados: C:\dados\processados
+  output_importados: C:\saida\importados
+  output_processados: C:\saida\processados
+  output_cte: C:\saida\cte
+  staging_dir: C:\staging
+  tmp_extract_dir: C:\staging\tmp_zip
 
 checkpoint:
-  sqlite_path: "C:\\nfe_etl\\checkpoint.sqlite"
+  sqlite_path: C:\staging\checkpoint.sqlite
+
+rules:
+  min_year: 2023
+  moving_window_months: 2
+
+performance:
+  max_workers: 8
+  file_chunk_size: 500
+  record_chunk_size: 50000
 
 logging:
-  level: "INFO"               # DEBUG | INFO | WARNING | ERROR | CRITICAL
-  json: true                  # true = JSON estruturado | false = texto legível
-  file_path: "C:\\nfe_etl\\logs\\nfe_parquet.log"   # omitir para logar só no console
+  level: INFO
+  format: json
 ```
-
----
 
 ## Execução
 
-Com o ambiente virtual ativo e o `config.yaml` configurado:
-
 ```bash
-python -m nfe_parquet.cli config/config.yaml
+python -m nfe_parquet.cli config.yaml
 ```
 
-Para desenvolvimento com logs legíveis, defina `json: false` no `config.yaml`:
+**Exit codes:**
 
-```bash
-# Saída no terminal (texto)
-python -m nfe_parquet.cli config/config.yaml
-
-# Redirecionando logs para arquivo manualmente (alternativa ao file_path no yaml)
-python -m nfe_parquet.cli config/config.yaml 2>> logs/etl.log
-```
-
----
-
-## Logs
-
-### Formato JSON (`json: true`) — produção
-
-Cada evento é uma linha JSON independente, diretamente consumível por Splunk, Datadog, Loki, etc.
-
-```json
-{"ts": "2026-02-24T14:30:00.000+00:00", "level": "INFO", "logger": "nfe_parquet.orchestrator.pipeline_mt", "message": "scan_done", "source": "importados", "total": 1240, "xml": 800, "zip": 440, "elapsed_ms": 87}
-{"ts": "2026-02-24T14:30:12.500+00:00", "level": "INFO", "logger": "nfe_parquet.orchestrator.pipeline_mt", "message": "compact_done", "source": "importados", "month": "202601", "parts": 4, "rows": 48321, "output": "L:\\...\\202601.parquet", "elapsed_ms": 312}
-{"ts": "2026-02-24T14:30:12.800+00:00", "level": "INFO", "logger": "nfe_parquet.orchestrator.pipeline_mt", "message": "source_run_summary", "source": "importados", "ok": 48000, "filtered": 321, "skipped": 900, "errors": 0, "months_written": 2}
-```
-
-### Formato texto (`json: false`) — desenvolvimento
-
-```
-2026-02-24T14:30:00  INFO      nfe_parquet.orchestrator.pipeline_mt  scan_done
-2026-02-24T14:30:12  INFO      nfe_parquet.orchestrator.pipeline_mt  compact_done
-2026-02-24T14:30:12  INFO      nfe_parquet.orchestrator.pipeline_mt  source_run_summary
-```
-
----
-
-## Idempotência e reprocessamento
-
-O checkpoint registra cada arquivo processado pelo fingerprint `tamanho|mtime_ns`. Na próxima execução, arquivos não modificados são ignorados (campo `skipped` no resumo).
-
-A **janela móvel** (`moving_window_months`) garante que os últimos N meses sejam sempre reprocessados, reconciliando arquivos que chegaram com atraso. Arquivos fora da janela são descartados silenciosamente (`filtered`).
-
-Para forçar o reprocessamento completo de tudo, basta apagar o arquivo SQLite do checkpoint:
-
-```bash
-del C:\nfe_etl\checkpoint.sqlite   # Windows
-rm C:/nfe_etl/checkpoint.sqlite    # Linux / macOS
-```
-
----
+| Código | Significado |
+|--------|-------------|
+| `0` | Pipeline concluído sem erros |
+| `1` | Pipeline concluído com erros em pelo menos uma origem |
+| `1` | Erro fatal (exceção não tratada ou config inválida) |
+| `130` | Interrompido por Ctrl+C |
 
 ## Testes
 
 ```bash
-pytest
+# Gerar o fixture ZIP (apenas na primeira vez)
+python tests/fixtures/make_zip.py
+
+# Rodar todos os testes unitários
+pytest tests/ -v
+
+# Com cobertura
+pytest tests/ -v --cov=src/nfe_parquet --cov-report=term-missing
 ```
 
----
+Consulte `Desc_Tecnica.md` para detalhes sobre a estratégia de testes e a integração com o pipeline de produção.
 
-## Dependências principais
+## Fluxo de execução detalhado
 
-| Pacote | Uso |
-|---|---|
-| `pyarrow` | Leitura e escrita de Parquet, schema tipado |
-| `lxml` | Parse de XML sem namespace via localname |
-| `python-dateutil` | Parse robusto de `dhEmi` (ISO 8601 com timezone) |
-| `pyyaml` | Leitura do `config.yaml` |
+1. `cli.py` carrega o `config.yaml` e inicializa o logging
+2. `run_once_mt` cria o `SQLiteCheckpointStore`, carrega o cache em RAM e calcula a janela móvel de meses
+3. Para cada origem NF-e (`importados`, `processados`), `_run_source_mt` varre os arquivos, filtra por checkpoint e janela, parseia em paralelo, acumula em buffers mensais e grava parts intermediários em staging
+4. `run_cte_mt` executa o mesmo fluxo para CT-e, compartilhando o mesmo store de checkpoint
+5. Ao final de cada origem, os parts são compactados em um único Parquet por mês via `_compact_month`, e o staging é limpo
+6. O checkpoint é commitado **somente se `errors == 0`**, garantindo idempotência
+7. `run_once_mt` retorna `True` se qualquer origem teve erros; `cli.py` traduz isso em `sys.exit(1)`
+
+## Garantias de produção
+
+**Idempotência** — arquivos já processados não são reprocessados. Reprocessamento ocorre somente se o fingerprint (tamanho + mtime) mudar, o que indica modificação do arquivo na origem.
+
+**Atomicidade** — o Parquet final só substitui o anterior após escrita completa via `os.replace`. Nunca há arquivo corrompido em disco.
+
+**Arquivos vazios** — descartados silenciosamente como `skipped`, sem bloquear o checkpoint dos demais arquivos válidos da mesma execução.
+
+**Exit code confiável** — agendadores externos (Task Scheduler, Airflow, cron) detectam falhas via código de saída `1`, sem depender de inspeção de logs.

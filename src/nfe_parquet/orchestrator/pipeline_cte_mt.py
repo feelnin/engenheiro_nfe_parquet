@@ -12,13 +12,13 @@ from __future__ import annotations
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Set, Tuple
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-
+import pyarrow.compute as pc
 from ..checkpoint.fingerprint import fingerprint_size_mtime
 from ..checkpoint.store_sqlite import CheckpointKey, SQLiteCheckpointStore
 from ..config.models import AppConfig
@@ -29,28 +29,30 @@ from ..observability.setup import get_logger
 from ..parse.cte_parser import is_cte_xml, parse_cte_xml
 from ..schema.cte_schema import get_cte_arrow_schema
 from ..transform.filters import is_year_allowed
-from ..transform.window import last_n_months_yyyymm
 from ..write.atomic_commit import atomic_replace
 from .chunking import chunked
 
 log = get_logger(__name__)
 
-# Nome da origem no checkpoint — distinto de "processados" (NF-e)
 _SOURCE_NAME = "processados_cte"
 
 
-def run_cte_mt(cfg: AppConfig, ckpt: SQLiteCheckpointStore, moving_months: Set[str]) -> None:
+def run_cte_mt(cfg: AppConfig, ckpt: SQLiteCheckpointStore, moving_months: Set[str]) -> bool:
     """
     Ponto de entrada do pipeline de CT-e.
 
     Recebe o ckpt já inicializado (cache carregada) e o conjunto de meses
     da janela móvel, ambos vindos do run_once_mt principal.
+
+    Returns:
+        True  — se houve errors > 0
+        False — tudo correu sem erros
     """
-    _run_source_cte(
+    return _run_source_cte(
         cfg=cfg,
-        input_root=cfg.paths.input_processados,   # mesma pasta que NF-e processados
+        input_root=cfg.paths.input_processados,
         output_dir=cfg.paths.output_cte,
-        ingested_at=datetime.utcnow(),
+        ingested_at=datetime.now(timezone.utc),
         ckpt=ckpt,
         moving_months=moving_months,
     )
@@ -63,7 +65,16 @@ def _run_source_cte(
     ingested_at: datetime,
     ckpt: SQLiteCheckpointStore,
     moving_months: Set[str],
-) -> None:
+) -> bool:
+    ctx = {"source": _SOURCE_NAME}
+
+    if not input_root.exists():
+        log.error(
+            "input_dir_not_found",
+            extra={**ctx, "root": str(input_root)},
+        )
+        return True  # propaga como error → exit code 1
+
     schema = get_cte_arrow_schema()
     parts_root = cfg.paths.staging_dir / "parts"
     commit_tmp_root = cfg.paths.staging_dir / "commit_tmp"
@@ -75,8 +86,6 @@ def _run_source_cte(
     chunk_size = cfg.performance.file_chunk_size
     max_workers = cfg.performance.max_workers
     max_buffer_records = cfg.performance.record_chunk_size
-
-    ctx = {"source": _SOURCE_NAME}
 
     # ── Scan ─────────────────────────────────────────────────────────────────
     log.info("scan_start", extra={**ctx, "root": str(input_root)})
@@ -93,7 +102,7 @@ def _run_source_cte(
 
     if not work_items:
         log.warning("scan_empty", extra=ctx)
-        return
+        return False
 
     # ── Processamento paralelo ────────────────────────────────────────────────
     ok = filtered = errors = skipped = not_cte = 0
@@ -126,7 +135,6 @@ def _run_source_cte(
                     skipped += 1
                     continue
 
-                # Sinal explícito: XML não é CT-e (é NF-e ou outro documento)
                 if res == "not_cte":
                     not_cte += 1
                     continue
@@ -244,6 +252,8 @@ def _run_source_cte(
         },
     )
 
+    return errors > 0
+
 
 # ── Workers (executados em threads) ───────────────────────────────────────────
 
@@ -277,15 +287,10 @@ def _process_xml(
 
     xml_bytes = it.file_path.read_bytes()
 
-    # Arquivo vazio ou só whitespace: descarta sem quebrar o pipeline
     if not xml_bytes.strip():
-        log.warning(
-            "xml_empty_skipped",
-            extra={"source": _SOURCE_NAME, "file": str(it.file_path)},
-        )
+        log.warning("xml_empty_skipped", extra={"source": _SOURCE_NAME, "file": str(it.file_path)})
         return None
 
-    # Inspeciona tag raiz — descarta silenciosamente se não for CT-e
     if not is_cte_xml(xml_bytes):
         log.debug("xml_not_cte", extra={"source": _SOURCE_NAME, "file": str(it.file_path)})
         return "not_cte"
@@ -337,7 +342,13 @@ def _process_zip(
             entry_path = str(xml_path.relative_to(tmp_dir))
             xml_bytes = xml_path.read_bytes()
 
-            # Inspeciona tag raiz — pula XMLs que não são CT-e dentro do ZIP
+            if not xml_bytes.strip():
+                log.warning(
+                    "zip_entry_empty_skipped",
+                    extra={"source": _SOURCE_NAME, "zip": str(it.file_path), "entry": entry_path},
+                )
+                continue
+
             if not is_cte_xml(xml_bytes):
                 skipped_not_cte += 1
                 continue
@@ -367,7 +378,6 @@ def _process_zip(
             cte_count += 1
 
     if cte_count == 0:
-        # ZIP não continha nenhum CT-e — não marca checkpoint
         log.debug(
             "zip_no_cte_found",
             extra={"source": _SOURCE_NAME, "file": str(it.file_path), "skipped_not_cte": skipped_not_cte},
@@ -442,24 +452,74 @@ def _compact_month(
     log.info("compact_start", extra={"source": _SOURCE_NAME, "month": month, "parts": len(parts)})
     t0 = time.perf_counter()
 
-    writer = pq.ParquetWriter(tmp_path, schema=schema)
-    total_rows = 0
-    try:
-        for p in parts:
-            t = pq.read_table(p, schema=schema)
-            writer.write_table(t)
-            total_rows += t.num_rows
-    finally:
-        writer.close()
+    # ── Concatenar todas as parts ──────────────────────────────────────────────
+    tables = []
+    total_rows_raw = 0
+    for p in parts:
+        t = pq.read_table(p, schema=schema)
+        tables.append(t)
+        total_rows_raw += t.num_rows
 
+    if not tables:
+        log.warning("compact_no_data", extra={"source": _SOURCE_NAME, "month": month})
+        return
+
+    combined = pa.compute.list_flatten(tables) if len(tables) > 1 else tables[0]
+
+    # ── Dedupe por chCTe (CT-e) ────────────────────────────────────────────────
+    # Critério: chave asc, source_file_mtime_ns desc, ingested_at desc, source_file_path desc, source_entry_path desc
+    key_col = "chCTe"
+    sort_keys = [
+        (key_col, "ascending"),
+        ("source_file_mtime_ns", "descending"),
+        ("ingested_at", "descending"),
+        ("source_file_path", "descending"),
+        ("source_entry_path", "descending"),
+    ]
+
+    # Filtrar nulos de chave (logar e descartar)
+    valid_mask = pc.is_null(combined[key_col], nan_is_null=True)
+    null_keys_count = pc.count(valid_mask).as_py()
+    combined = pc.filter(combined, pc.invert(valid_mask))
+
+    # Ordenar
+    sorted_indices = pc.sort_indices(combined, sort_keys=sort_keys)
+    sorted_table = pc.take(combined, sorted_indices)
+
+    # Manter primeira ocorrência por chave (dedupe)
+    key_column = sorted_table[key_col]
+    is_first = pc.unique(key_column, count_option="first").indices
+    deduped = pc.take(sorted_table, is_first)
+
+    total_rows_after = deduped.num_rows
+    dupes_removed = total_rows_raw - total_rows_after
+
+    log.info(
+        "compact_dedupe",
+        extra={
+            "source": _SOURCE_NAME,
+            "month": month,
+            "rows_before": total_rows_raw,
+            "rows_after": total_rows_after,
+            "dupes_removed": dupes_removed,
+            "null_keys": null_keys_count,
+        },
+    )
+
+    # ── Escrever final ─────────────────────────────────────────────────────────
+    pq.write_table(deduped, tmp_path)
     atomic_replace(tmp_path, final_path)
+
+    import shutil
+    shutil.rmtree(parts_dir, ignore_errors=True)
+
     log.info(
         "compact_done",
         extra={
             "source": _SOURCE_NAME,
             "month": month,
             "parts": len(parts),
-            "rows": total_rows,
+            "rows": total_rows_after,
             "output": str(final_path),
             "elapsed_ms": round((time.perf_counter() - t0) * 1000),
         },
