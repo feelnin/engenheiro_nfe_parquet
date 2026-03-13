@@ -291,10 +291,49 @@ def _process_work_item(
     return _process_zip(cfg, it, ingested_at, ckpt)
 
 
+def _handle_dead_letter(
+    ckpt: SQLiteCheckpointStore,
+    fingerprint: str,
+    source_path: str,
+    exc: Exception,
+    source_label: str,
+) -> None:
+    """Registra arquivo irrecuperável na dead-letter e emite WARNING. Nunca levanta exceção."""
+    error_type = type(exc).__name__
+    error_message = str(exc)[:500]
+    log.warning(
+        "xml_dead_letter_recorded",
+        extra={
+            "source": source_label,
+            "file": source_path,
+            "error_type": error_type,
+            "error_message": error_message,
+        },
+    )
+    try:
+        ckpt.record_dead_letter(
+            fingerprint=fingerprint,
+            source_path=source_path,
+            error_type=error_type,
+            error_message=error_message,
+        )
+    except Exception as db_exc:
+        log.error(
+            "dead_letter_record_failed",
+            extra={"file": source_path, "error": str(db_exc)},
+        )
+
+
 def _process_xml(
     it: WorkItem, ingested_at: datetime, ckpt: SQLiteCheckpointStore
 ) -> Tuple[list[dict], CheckpointKey] | None:
     fingerprint = fingerprint_size_mtime(it.file_path)
+
+    # Arquivos já conhecidos como corrompidos são pulados imediatamente
+    if ckpt.is_dead_letter(fingerprint):
+        log.debug("xml_skipped_dead_letter", extra={"source": it.source, "file": str(it.file_path)})
+        return None
+
     key = CheckpointKey(
         source=it.source,
         source_file_path=str(it.file_path),
@@ -320,7 +359,12 @@ def _process_xml(
         source_entry_path=None,
         source_file_mtime=datetime.fromtimestamp(it.file_path.stat().st_mtime),
     )
-    result = parse_nfe_xml(xml_bytes, meta=meta, ingested_at=ingested_at)
+
+    try:
+        result = parse_nfe_xml(xml_bytes, meta=meta, ingested_at=ingested_at)
+    except Exception as exc:
+        _handle_dead_letter(ckpt, fingerprint, str(it.file_path), exc, it.source)
+        return None  # isola o arquivo sem bloquear o pipeline
 
     if result.warnings:
         log.debug(

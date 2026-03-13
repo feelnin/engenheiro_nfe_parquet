@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,7 @@ class SQLiteCheckpointStore:
         self._init_db()
         # Inicializamos a cache como None para saber se foi carregada
         self._cache: set[tuple[str, str, str, str]] | None = None
+        self._dead_letter_cache: set[str] | None = None
 
     def _init_db(self) -> None:
         with sqlite3.connect(self.db_path) as con:
@@ -48,6 +49,18 @@ class SQLiteCheckpointStore:
                 ON checkpoint (source, source_file_path, source_entry_path, processed_at)
                 """
             )
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS dead_letter (
+                    fingerprint   TEXT PRIMARY KEY,
+                    source_path   TEXT NOT NULL,
+                    error_type    TEXT NOT NULL,
+                    error_message TEXT,
+                    failed_at     TEXT NOT NULL,
+                    retry_count   INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
 
     def load_cache(self) -> None:
         """Carrega todos os fingerprints já processados para a RAM (operações O(1))."""
@@ -62,6 +75,11 @@ class SQLiteCheckpointStore:
             
             # Armazenamos como um set de tuplos para pesquisas ultra-rápidas
             self._cache = set(rows)
+
+            rows_dl = con.execute(
+                "SELECT fingerprint FROM dead_letter"
+            ).fetchall()
+            self._dead_letter_cache = {row[0] for row in rows_dl}
 
     def was_processed(self, key: CheckpointKey) -> bool:
         """Verifica se já foi processado recorrendo à cache na RAM (se disponível)."""
@@ -112,6 +130,49 @@ class SQLiteCheckpointStore:
                     status,
                     notes,
                 ),
+            )
+
+    def is_dead_letter(self, fingerprint: str) -> bool:
+        """Retorna True se o fingerprint está na dead-letter queue."""
+        if self._dead_letter_cache is not None:
+            return fingerprint in self._dead_letter_cache
+        # Fallback para disco quando a cache não foi carregada
+        with sqlite3.connect(self.db_path) as con:
+            row = con.execute(
+                "SELECT 1 FROM dead_letter WHERE fingerprint = ? LIMIT 1",
+                (fingerprint,),
+            ).fetchone()
+            return row is not None
+
+    def record_dead_letter(
+        self,
+        fingerprint: str,
+        source_path: str,
+        error_type: str,
+        error_message: str | None,
+    ) -> None:
+        """
+        Insere ou incrementa retry_count na dead-letter queue.
+
+        Usa INSERT ... ON CONFLICT DO UPDATE para idempotência — failed_at é
+        atualizado a cada tentativa.
+        Não atualiza _dead_letter_cache intencionalmente: a cache reflete o estado
+        no momento do load_cache(). Novas entradas ficam visíveis na próxima execução.
+        """
+        failed_at = datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self.db_path) as con:
+            con.execute(
+                """
+                INSERT INTO dead_letter
+                    (fingerprint, source_path, error_type, error_message, failed_at, retry_count)
+                VALUES (?, ?, ?, ?, ?, 1)
+                ON CONFLICT(fingerprint) DO UPDATE SET
+                    error_type    = excluded.error_type,
+                    error_message = excluded.error_message,
+                    failed_at     = excluded.failed_at,
+                    retry_count   = retry_count + 1
+                """,
+                (fingerprint, source_path, error_type, (error_message or "")[:500], failed_at),
             )
 
     def mark_processed_batch(
