@@ -17,7 +17,10 @@ from ..transform.filters import is_year_allowed
 from ..write.atomic_commit import atomic_replace
 from ..schema.parquet_schema import get_arrow_schema
 
+import shutil
+
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from .chunking import chunked
@@ -75,6 +78,24 @@ def run_once_mt(cfg: AppConfig) -> bool:
     if cte_had_errors:
         had_errors = True
     log.info("cte_pipeline_finish")
+
+    # ── Flatten (geração dos Parquets flat para Qlik Sense SaaS) ─────────────
+    # O flatten é executado APÓS o pipeline principal, independentemente de erros
+    # anteriores. Erros de flatten são somados ao had_errors mas NÃO impedem que
+    # os Parquets normais (já escritos) sejam utilizados.
+    log.info("flatten_start")
+    t_flat = time.perf_counter()
+    from ..flatten.runner import run_flatten
+    flatten_had_errors = run_flatten(cfg=cfg, moving_months=moving_months)
+    log.info(
+        "flatten_finish",
+        extra={
+            "had_errors": flatten_had_errors,
+            "elapsed_ms": round((time.perf_counter() - t_flat) * 1000),
+        },
+    )
+    if flatten_had_errors:
+        had_errors = True
 
     return had_errors
 
@@ -437,14 +458,14 @@ def _compact_month(
         log.warning("compact_no_data", extra={"source": source, "month": month})
         return
 
-    combined = pa.compute.list_flatten(tables) if len(tables) > 1 else tables[0]
+    combined = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
 
     # ── Dedupe por chNFe (NF-e) ────────────────────────────────────────────────
-    # Critério: chave asc, source_file_mtime_ns desc, ingested_at desc, source_file_path desc, source_entry_path desc
+    # Critério: chave asc, source_file_mtime desc, ingested_at desc, source_file_path desc, source_entry_path desc
     key_col = "chNFe"
     sort_keys = [
         (key_col, "ascending"),
-        ("source_file_mtime_ns", "descending"),
+        ("source_file_mtime", "descending"),
         ("ingested_at", "descending"),
         ("source_file_path", "descending"),
         ("source_entry_path", "descending"),
@@ -460,9 +481,14 @@ def _compact_month(
     sorted_table = pc.take(combined, sorted_indices)
 
     # Manter primeira ocorrência por chave (dedupe)
-    key_column = sorted_table[key_col]
-    is_first = pc.unique(key_column, count_option="first").indices
-    deduped = pc.take(sorted_table, is_first)
+    # A tabela já está ordenada por chave asc, então duplicatas são adjacentes.
+    # Percorremos a coluna-chave e marcamos True apenas na primeira ocorrência de cada valor.
+    seen_keys: set = set()
+    is_first_flags: list[bool] = []
+    for k in sorted_table.column(key_col).to_pylist():
+        is_first_flags.append(k not in seen_keys)
+        seen_keys.add(k)
+    deduped = sorted_table.filter(pa.array(is_first_flags, type=pa.bool_()))
 
     total_rows_after = deduped.num_rows
     dupes_removed = total_rows_raw - total_rows_after
@@ -483,7 +509,6 @@ def _compact_month(
     pq.write_table(deduped, tmp_path)
     atomic_replace(tmp_path, final_path)
 
-    import shutil
     shutil.rmtree(parts_dir, ignore_errors=True)
 
     log.info(

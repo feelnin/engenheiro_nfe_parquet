@@ -222,13 +222,13 @@ class TestDedupeCompactacao:
         r1 = _nfe_record(month)
         r1["source_file_mtime"] = datetime(2026, 2, 10, tzinfo=timezone.utc)
         r1["ingested_at"] = datetime(2026, 2, 25, 10, 0, 0, tzinfo=timezone.utc)
-        r1["source_file_path"] = "C:\dados\\nfe_old.xml"
+        r1["source_file_path"] = r"C:\dados\nfe_old.xml"
 
         # Registro "novo" (mesma chave)
         r2 = _nfe_record(month)
         r2["source_file_mtime"] = datetime(2026, 2, 12, tzinfo=timezone.utc)
         r2["ingested_at"] = datetime(2026, 2, 25, 10, 0, 0, tzinfo=timezone.utc)
-        r2["source_file_path"] = "C:\dados\\nfe_new.xml"
+        r2["source_file_path"] = r"C:\dados\nfe_new.xml"
 
         # Escreve em duas parts separadas
         pq.write_table(pa.Table.from_pylist([r1], schema=schema), parts_dir / "part-000000.parquet")
@@ -247,7 +247,7 @@ class TestDedupeCompactacao:
         assert t.num_rows == 1
         assert t.column("chNFe")[0].as_py() == r1["chNFe"]
         # Deve manter o mais recente
-        assert t.column("source_file_path")[0].as_py() == "C:\dados\\nfe_new.xml"
+        assert t.column("source_file_path")[0].as_py() == r"C:\dados\nfe_new.xml"
 
     def test_nfe_dedupe_desempata_por_ingested_at(self, tmp_path):
         schema = get_arrow_schema()
@@ -265,12 +265,12 @@ class TestDedupeCompactacao:
         r1 = _nfe_record(month)
         r1["source_file_mtime"] = datetime(2026, 2, 12, tzinfo=timezone.utc)
         r1["ingested_at"] = datetime(2026, 2, 25, 9, 0, 0, tzinfo=timezone.utc)
-        r1["source_file_path"] = "C:\dados\\nfe_a.xml"
+        r1["source_file_path"] = r"C:\dados\nfe_a.xml"
 
         r2 = _nfe_record(month)
         r2["source_file_mtime"] = datetime(2026, 2, 12, tzinfo=timezone.utc)  # igual
         r2["ingested_at"] = datetime(2026, 2, 25, 10, 0, 0, tzinfo=timezone.utc)  # mais novo
-        r2["source_file_path"] = "C:\dados\\nfe_b.xml"
+        r2["source_file_path"] = r"C:\dados\nfe_b.xml"
 
         pq.write_table(pa.Table.from_pylist([r1], schema=schema), parts_dir / "part-000000.parquet")
         pq.write_table(pa.Table.from_pylist([r2], schema=schema), parts_dir / "part-000001.parquet")
@@ -286,7 +286,7 @@ class TestDedupeCompactacao:
 
         t = pq.read_table(out_dir / f"{month}.parquet")
         assert t.num_rows == 1
-        assert t.column("source_file_path")[0].as_py() == "C:\dados\\nfe_b.xml"
+        assert t.column("source_file_path")[0].as_py() == r"C:\dados\nfe_b.xml"
 
     def test_cte_dedupe_mesmo_chCTe_mantem_mais_recente_por_mtime(self, tmp_path):
         schema = get_cte_arrow_schema()
@@ -317,7 +317,7 @@ class TestDedupeCompactacao:
         if "ingested_at" in r1:
             r1["ingested_at"] = datetime(2026, 2, 25, 10, 0, 0, tzinfo=timezone.utc)
         if "source_file_path" in r1:
-            r1["source_file_path"] = "C:\dados\cte_old.xml"
+            r1["source_file_path"] = r"C:\dados\cte_old.xml"
         if "source_entry_path" in r1:
             r1["source_entry_path"] = None
 
@@ -330,7 +330,7 @@ class TestDedupeCompactacao:
         if "ingested_at" in r2:
             r2["ingested_at"] = datetime(2026, 2, 25, 10, 0, 0, tzinfo=timezone.utc)
         if "source_file_path" in r2:
-            r2["source_file_path"] = "C:\dados\cte_new.xml"
+            r2["source_file_path"] = r"C:\dados\cte_new.xml"
         if "source_entry_path" in r2:
             r2["source_entry_path"] = None
 
@@ -349,4 +349,4 @@ class TestDedupeCompactacao:
         assert t.num_rows == 1
         assert t.column("chCTe")[0].as_py() == chave
         if "source_file_path" in t.schema.names:
-            assert t.column("source_file_path")[0].as_py() == "C:\dados\cte_new.xml"
+            assert t.column("source_file_path")[0].as_py() == r"C:\dados\cte_new.xml"

@@ -9,6 +9,7 @@ Pipeline MT para CT-e — mesma lógica do pipeline_mt.py de NF-e, adaptado para
 """
 from __future__ import annotations
 
+import shutil
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -17,8 +18,8 @@ from pathlib import Path
 from typing import List, Set, Tuple
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pyarrow.compute as pc
+import pyarrow.parquet as pq
 from ..checkpoint.fingerprint import fingerprint_size_mtime
 from ..checkpoint.store_sqlite import CheckpointKey, SQLiteCheckpointStore
 from ..config.models import AppConfig
@@ -464,14 +465,14 @@ def _compact_month(
         log.warning("compact_no_data", extra={"source": _SOURCE_NAME, "month": month})
         return
 
-    combined = pa.compute.list_flatten(tables) if len(tables) > 1 else tables[0]
+    combined = pa.concat_tables(tables) if len(tables) > 1 else tables[0]
 
     # ── Dedupe por chCTe (CT-e) ────────────────────────────────────────────────
-    # Critério: chave asc, source_file_mtime_ns desc, ingested_at desc, source_file_path desc, source_entry_path desc
+    # Critério: chave asc, source_file_mtime desc, ingested_at desc, source_file_path desc, source_entry_path desc
     key_col = "chCTe"
     sort_keys = [
         (key_col, "ascending"),
-        ("source_file_mtime_ns", "descending"),
+        ("source_file_mtime", "descending"),
         ("ingested_at", "descending"),
         ("source_file_path", "descending"),
         ("source_entry_path", "descending"),
@@ -487,9 +488,14 @@ def _compact_month(
     sorted_table = pc.take(combined, sorted_indices)
 
     # Manter primeira ocorrência por chave (dedupe)
-    key_column = sorted_table[key_col]
-    is_first = pc.unique(key_column, count_option="first").indices
-    deduped = pc.take(sorted_table, is_first)
+    # A tabela já está ordenada por chave asc, então duplicatas são adjacentes.
+    # Percorremos a coluna-chave e marcamos True apenas na primeira ocorrência de cada valor.
+    seen_keys: set = set()
+    is_first_flags: list[bool] = []
+    for k in sorted_table.column(key_col).to_pylist():
+        is_first_flags.append(k not in seen_keys)
+        seen_keys.add(k)
+    deduped = sorted_table.filter(pa.array(is_first_flags, type=pa.bool_()))
 
     total_rows_after = deduped.num_rows
     dupes_removed = total_rows_raw - total_rows_after
@@ -510,7 +516,6 @@ def _compact_month(
     pq.write_table(deduped, tmp_path)
     atomic_replace(tmp_path, final_path)
 
-    import shutil
     shutil.rmtree(parts_dir, ignore_errors=True)
 
     log.info(

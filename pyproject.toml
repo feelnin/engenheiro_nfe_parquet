@@ -5,11 +5,16 @@ description = "ETL NF-e (XML/ZIP) -> Parquet mensal (AAAAMM) com checkpoint e lo
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "typer>=0.12",
   "pyyaml>=6.0",
   "pyarrow>=15.0",
   "lxml>=5.0",
   "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-cov>=5.0",
 ]
 
 [build-system]

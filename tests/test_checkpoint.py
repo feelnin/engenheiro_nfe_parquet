@@ -215,7 +215,9 @@ class TestFingerprintSizeMtime:
         # copia mtime manualmente para garantir igualdade
         import shutil, os
         shutil.copy2(f1, f2)
-        os.utime(f2, (f1.stat().st_atime, f1.stat().st_mtime))
+        # usa ns= para preservar precisão em nanosegundos (st_mtime_ns)
+        # evita perda de precisão na conversão float → ns no Windows/NTFS
+        os.utime(f2, ns=(f1.stat().st_atime_ns, f1.stat().st_mtime_ns))
         assert fingerprint_size_mtime(f1) == fingerprint_size_mtime(f2)
 
     def test_arquivo_modificado_muda_fingerprint(self, tmp_path):

@@ -76,12 +76,15 @@ class TestLastNMonthsYyyyMm:
         assert result == {"202601", "202512"}
 
     def test_virada_de_ano_n12(self):
-        """12 meses partindo de janeiro deve cobrir o ano inteiro anterior."""
+        """12 meses partindo de janeiro cobre o mês atual + 11 anteriores.
+        Com n=12 e now=2026-01, o resultado é 202601..202502 (não inclui 202501,
+        que seria o 13º mês).
+        """
         now = datetime(2026, 1, 1, tzinfo=timezone.utc)
         result = last_n_months_yyyymm(now, n=12)
-        assert "202601" in result
-        assert "202502" in result
-        assert "202501" in result  # dezembro seria: last_n meses = jan..dez anterior
+        assert "202601" in result   # mês atual
+        assert "202502" in result   # 11 meses atrás (último da janela)
+        assert "202501" not in result  # fora da janela — seria o 13º mês
         assert len(result) == 12
 
     def test_resultado_e_set(self):
