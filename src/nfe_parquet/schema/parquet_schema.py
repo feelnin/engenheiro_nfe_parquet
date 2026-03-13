@@ -26,6 +26,9 @@ def get_arrow_schema() -> pa.Schema:
             ("chNFe", pa.string()),
             ("cMunFG", pa.string()),
             ("natOp", pa.string()),
+            ("mod", pa.string()),
+            ("tpNF", pa.string()),
+            ("finNFe", pa.string()),
             ("refNFe", pa.string()),
             ("qBCMonoRet", DECIMAL),
             ("modFrete", pa.string()),
@@ -91,6 +94,9 @@ def get_arrow_schema() -> pa.Schema:
             ("dup_nDup", pa.list_(pa.string())),
             ("dup_dVenc", pa.list_(pa.date32())),
             ("pag_tPag", pa.list_(pa.string())),
+            # campos derivados (particionamento analítico)
+            ("ano_emissao", pa.int16()),
+            ("mes_emissao", pa.int8()),
             # metadados
             ("ref_aaaamm", pa.string()),
             ("source", pa.string()),

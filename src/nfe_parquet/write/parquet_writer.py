@@ -57,7 +57,7 @@ def write_monthly_parquet(
     tmp_path = staging_dir / f"{month}.parquet.tmp"
 
     table = pa.Table.from_pylist(records, schema=schema)
-    pq.write_table(table, tmp_path)
+    pq.write_table(table, tmp_path, compression="zstd", compression_level=3)
 
     atomic_replace(tmp_path, final_path)
 

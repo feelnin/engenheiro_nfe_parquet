@@ -125,7 +125,7 @@ def flatten_cte_parquet(
     final_path = output_dir / f"{month}.parquet"
     tmp_path = staging_dir / f"flat_cte_{month}.parquet.tmp"
 
-    pq.write_table(flat_table, tmp_path)
+    pq.write_table(flat_table, tmp_path, compression="zstd", compression_level=3)
     atomic_replace(tmp_path, final_path)
 
     log.info(

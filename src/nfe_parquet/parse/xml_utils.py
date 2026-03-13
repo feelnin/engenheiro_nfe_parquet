@@ -3,13 +3,22 @@ from __future__ import annotations
 from typing import Iterable, Optional
 from lxml import etree
 
+# Parser seguro: desabilita entidades externas (XXE), DTD e acesso à rede.
+# Declarado uma vez no módulo — thread-safe em lxml.
+_SAFE_PARSER = etree.XMLParser(
+    resolve_entities=False,
+    no_network=True,
+    load_dtd=False,
+    huge_tree=False,
+)
+
 
 def parse_xml_bytes(xml_bytes: bytes) -> etree._Element:
     """Parseia bytes de XML, tolerando BOM e espaços iniciais."""
     xml_bytes = xml_bytes.lstrip()
     if not xml_bytes:
         raise ValueError("XML vazio ou somente whitespace")
-    return etree.fromstring(xml_bytes)
+    return etree.fromstring(xml_bytes, parser=_SAFE_PARSER)
 
 
 def qname_local(tag: str) -> str:

@@ -92,8 +92,9 @@ def parse_cte_xml(xml_bytes: bytes, meta: SourceMeta, ingested_at: datetime) -> 
         "vICMS10": vICMS10,
         # complemento
         "xObs": _none_or_str(find_text(inf_cte, "compl/xObs")),
-        # chave
+        # chave e status
         "chCTe": _none_or_str(chCTe),
+        "cStat": _none_or_str(find_text(prot_node, "infProt/cStat")) if prot_node is not None else None,
         # arrays
         "infQ_qCarga":  [],
         "infNFe_chave": [],

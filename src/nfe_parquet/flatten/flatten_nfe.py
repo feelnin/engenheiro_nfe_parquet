@@ -162,7 +162,7 @@ def flatten_nfe_parquet(
     final_path = output_dir / f"{month}.parquet"
     tmp_path = staging_dir / f"flat_nfe_{month}.parquet.tmp"
 
-    pq.write_table(flat_table, tmp_path)
+    pq.write_table(flat_table, tmp_path, compression="zstd", compression_level=3)
     atomic_replace(tmp_path, final_path)
 
     log.info(
@@ -235,7 +235,10 @@ def _explode_table_nfe(table: pa.Table) -> list[dict[str, Any]]:
 
             if max_len == 0:
                 # Grupo sem elementos → 1 linha com NULLs para preservar a NF-e
-                group_rows.append([{col: None for col in cols}])
+                empty_row: dict[str, Any] = {col: None for col in cols}
+                if _gname == "itens":
+                    empty_row["item_seq"] = None
+                group_rows.append([empty_row])
             else:
                 rows_for_group: list[dict[str, Any]] = []
                 for i in range(max_len):
@@ -243,6 +246,8 @@ def _explode_table_nfe(table: pa.Table) -> list[dict[str, Any]]:
                     for col in cols:
                         lst = lists_in_group[col]
                         row_dict[col] = lst[i] if i < len(lst) else None
+                    if _gname == "itens":
+                        row_dict["item_seq"] = i + 1  # sequência 1-based
                     rows_for_group.append(row_dict)
                 group_rows.append(rows_for_group)
 
@@ -275,16 +280,25 @@ def _build_flat_schema_nfe(original_schema: pa.Schema) -> pa.Schema:
     Regras:
     - Colunas escalares → mantém tipo original
     - Colunas de lista  → extrai o tipo do elemento (list<T> → T)
+    - item_seq          → inserido após o último campo itens_* (int16, 1-based)
     """
     fields: list[pa.Field] = []
+    last_itens_pos = -1
+
     for field in original_schema:
         if field.name in _ALL_LIST_COLS:
-            # Extrai tipo interno da lista
             if pa.types.is_list(field.type):
                 inner_type = field.type.value_type
             else:
                 inner_type = field.type  # fallback (não deveria ocorrer)
             fields.append(pa.field(field.name, inner_type))
+            if field.name.startswith("itens_"):
+                last_itens_pos = len(fields) - 1
         else:
             fields.append(field)
+
+    # Injeta item_seq logo após o último campo itens_*
+    insert_at = last_itens_pos + 1 if last_itens_pos >= 0 else len(fields)
+    fields.insert(insert_at, pa.field("item_seq", pa.int16()))
+
     return pa.schema(fields)

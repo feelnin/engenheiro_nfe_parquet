@@ -418,7 +418,7 @@ def _flush_month_buffer(
     part_path = parts_dir / f"part-{idx:06d}.parquet"
     t0 = time.perf_counter()
     table = pa.Table.from_pylist(records, schema=schema)
-    pq.write_table(table, part_path)
+    pq.write_table(table, part_path, compression="zstd", compression_level=3)
 
     log.debug(
         "flush_part",
@@ -513,7 +513,7 @@ def _compact_month(
     )
 
     # ── Escrever final ─────────────────────────────────────────────────────────
-    pq.write_table(deduped, tmp_path)
+    pq.write_table(deduped, tmp_path, compression="zstd", compression_level=3)
     atomic_replace(tmp_path, final_path)
 
     shutil.rmtree(parts_dir, ignore_errors=True)

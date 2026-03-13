@@ -52,8 +52,9 @@ def get_cte_arrow_schema() -> pa.Schema:
             ("vICMS10", DECIMAL),
             # complemento
             ("xObs", pa.string()),
-            # chave
+            # chave e status
             ("chCTe", pa.string()),
+            ("cStat", pa.string()),
             # arrays
             ("infQ_qCarga",  pa.list_(DECIMAL)),
             ("infNFe_chave", pa.list_(pa.string())),

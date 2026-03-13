@@ -98,6 +98,9 @@ def parse_nfe_xml(xml_bytes: bytes, meta: SourceMeta, ingested_at: datetime) -> 
         "chNFe": _none_or_str(chNFe),
         "cMunFG": _none_or_str(find_text(infnfe, "ide/cMunFG")),
         "natOp": _none_or_str(find_text(infnfe, "ide/natOp")),
+        "mod": _none_or_str(find_text(infnfe, "ide/mod")),
+        "tpNF": _none_or_str(find_text(infnfe, "ide/tpNF")),
+        "finNFe": _none_or_str(find_text(infnfe, "ide/finNFe")),
         "refNFe": _join_or_none(
             [find_text(n, "refNFe") for n in find_nodes(infnfe, "ide/NFref")]
         ),
@@ -130,6 +133,9 @@ def parse_nfe_xml(xml_bytes: bytes, meta: SourceMeta, ingested_at: datetime) -> 
         "dup_dVenc": [],
         "dup_nDup": [],
         "pag_tPag": [],
+        # campos derivados
+        "ano_emissao": dhEmi.year if dhEmi is not None else None,
+        "mes_emissao": dhEmi.month if dhEmi is not None else None,
         # metadados
         "ref_aaaamm": ref_aaaamm,
     }
