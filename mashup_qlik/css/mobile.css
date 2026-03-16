@@ -1,0 +1,14 @@
+@media (min-width: 768px) {
+    .container { padding: 1.5rem; max-width: 1200px; }
+    .filters-bar select { flex: 1; }
+    .kpi-grid { flex-direction: row; flex-wrap: wrap; }
+    .kpi-grid > * { flex: 1 1 calc(50% - 0.5rem); }
+    .charts-grid { display: grid; grid-template-columns: 1fr 1fr; }
+    .chart-wrapper { height: 300px; }
+    .full-width { grid-column: span 2; }
+}
+
+@media (min-width: 1024px) {
+    .kpi-grid > * { flex: 1; }
+    .container { max-width: 1440px; }
+}

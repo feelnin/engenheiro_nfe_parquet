@@ -1,0 +1,15 @@
+:root {
+    --primary-blue: #0B3D91;
+    --dark-blue: #062B63;
+    --energy-orange: #F58220;
+    --dark-gray: #2E2E2E;
+    --light-gray: #F5F7FA;
+    --white: #FFFFFF;
+    
+    --margin-high: #0B3D91;
+    --margin-neutral: #9E9E9E;
+    --margin-low: #F58220;
+    --margin-negative: #D32F2F;
+
+    --font-main: 'Inter', sans-serif;
+}

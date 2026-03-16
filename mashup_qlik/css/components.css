@@ -1,0 +1,47 @@
+/* Header */
+.app-header {
+    background: linear-gradient(135deg, var(--primary-blue) 0%, var(--energy-orange) 100%);
+    color: var(--white);
+    padding: 1.5rem 1rem;
+}
+
+/* Filters */
+.filters-bar {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1.5rem;
+}
+.filters-bar select {
+    flex: 1 1 100%;
+    padding: 0.75rem;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+}
+
+/* Cards */
+.card {
+    background: var(--white);
+    border-radius: 12px;
+    padding: 1rem;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+}
+.card-title {
+    font-size: 16px;
+    color: var(--dark-blue);
+    margin-bottom: 1rem;
+}
+
+/* KPIs */
+.kpi-card { border-left: 4px solid var(--primary-blue); }
+.kpi-card.alert { border-left-color: var(--margin-negative); }
+.kpi-title { font-size: 12px; color: #666; text-transform: uppercase; }
+.kpi-value { font-size: 24px; font-weight: 700; color: var(--dark-blue); }
+
+/* Table */
+.table-responsive { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { padding: 0.75rem; text-align: left; border-bottom: 1px solid #eee; }
+th { background: var(--light-gray); color: #666; }
+.num { text-align: right; }
+.badge { padding: 4px 8px; border-radius: 4px; color: white; font-weight: 600; }
